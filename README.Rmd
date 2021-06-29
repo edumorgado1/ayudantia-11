@@ -1,0 +1,197 @@
+---
+title: "Ayudantía 11"
+output: github_document
+---
+
+
+### Librerias:
+
+Cargamos las librerias que se utilizarán en este proyecto.
+
+```{r}
+library(dplyr)
+#library (tidyverse)
+library (ggplot2)
+library(datasets)
+library(pROC)
+library(discrim)
+library(plyr)
+library(caret)
+library(tidymodels)
+```
+
+### Cargamos la data:
+```{r}
+data = read.csv(file.choose())
+summary(data)
+
+```
+
+Limpiamos valores Nulos de la base de datos:
+
+```{r}
+sapply(data, function(x)sum(is.na(x)))
+data_limpia=na.omit(data)
+```
+Analizamos las variables y su tipo y corregimos.
+
+```{r}
+
+str(data_limpia)
+```
+```{r}
+data_limpia=mutate(data_limpia, default.payment.next.month=as.factor(default.payment.next.month), SEX=as.factor(SEX), MARRIAGE=as.factor(MARRIAGE), EDUCATION=as.factor(EDUCATION))
+str(data_limpia)
+```
+Hacemos cambios en variables que son de tipo factor. Nos enfocaremos en predecir la variable "default.payment.next.month" la cuañ indica si el cliente va a pagar o no el crédito que adeuda, con valores "0" y "1".
+
+## Aplicamos modelo "Arbol de desición":
+---
+  Creamos data de entrenamiento y de prueba para nuestro modelo.
+```{r}
+
+
+data_split <- initial_split(data_limpia, prop = 0.8)
+
+# Create data frames for the two sets:
+train_data <- training(data_split) 
+test_data <- testing(data_split)
+
+str(train_data)
+```
+Creamos receta:
+
+```{r}
+receta <- 
+  recipe(default.payment.next.month ~ AGE+MARRIAGE+EDUCATION+SEX+ PAY_0+PAY_AMT1, data = train_data)
+
+receta 
+modelo_trees <-
+  decision_tree(tree_depth = 5, min_n = 10) %>% 
+  set_engine("rpart") %>% 
+  set_mode("classification")
+
+modelo_trees
+```
+Ahora hacemos el fit del modelo:
+
+```{r}
+
+modelo= decision_tree(tree_depth =  5,min_n=10) %>%
+  set_engine("rpart") %>%set_mode("classification")
+modelo
+
+
+
+fit_mod <- function(mod){
+  
+  modelo_fit <- 
+  workflow() %>% 
+  add_model(mod) %>% 
+  add_recipe(receta) %>% 
+  fit(data = train_data)
+
+model_pred <- 
+  predict(modelo_fit, test_data, type = "prob") %>% 
+  bind_cols(test_data) 
+
+return(model_pred %>% 
+  roc_auc(truth= default.payment.next.month, .pred_0))
+}
+
+fit_mod(modelo)
+```
+Se hizo algunas pruebas cambiando variables y se obtuvo un valor AUC del 65% lo que no es el mejor valor
+
+
+## Comparamos con otros modelos:
+
+### Regresión Logística.
+
+```{r}
+modelo_rl <- 
+  logistic_reg() %>% 
+  set_engine("glm")
+
+fit_mod(modelo_rl)
+```
+En este caso la regresión logística arrojó un mejor porcentaje de predicción con un 73%.
+
+### Representación gráfica del Arbol:
+```{r}
+library(rpart)
+library(rpart.plot)
+```
+
+
+```{r}
+
+censo <- rpart(default.payment.next.month~AGE+MARRIAGE+EDUCATION+SEX+ PAY_0+PAY_AMT1, data = train_data, method = "class")
+
+rpart.plot(censo)
+```
+
+Se puede observar que la variable que mas toma peso en esta desición es la variable PAY_0 lo cual es bastante interesante descubrir.
+
+
+### Predict:
+```{r}
+pred <- predict(censo, newdata = test_data, type = "class")
+pred %>% as.data.frame() %>% head()
+```
+```{r}
+test_data$pred <- pred
+```
+
+## Predict para curva ROC:
+
+```{r}
+pred_incom_roc <- predict(censo, newdata = test_data, type = "prob")
+pred_incom_roc %>% as.data.frame() %>% head()
+```
+
+```{r}
+pred_incom_roc <- pred_incom_roc %>% as.data.frame()
+prob <- pred_incom_roc$"1"
+```
+
+
+## Evaluar modelo:
+
+
+### Matriz de confusión:
+```{r}
+cm <- confusionMatrix(table(test_data$default.payment.next.month, test_data$pred))
+test_data$pred <- as.factor(test_data$pred)
+
+table <- data.frame(confusionMatrix(test_data$default.payment.next.month, test_data$pred)$table)
+
+print(cm)
+```
+
+La matriz nos indica que se predijeron bien aproximadamente 5.000 datos y por otra parte aproximadamente 900 datos fueron predichos de manera erronea.
+
+
+### Curva ROC:
+
+```{r}
+ROC <- roc(test_data$default.payment.next.month,prob)
+
+plot(ROC, col = "#fd634b", family = "sans", cex = 2, main = "CART Model ROC Curve 
+AUC = 0.8474")
+```
+
+### Chequeo de overfitting:
+
+```{r}
+is_predicted<- predict(censo,newdata=train_data,type='class')
+misClassError <- mean(is_predicted != train_data$default.payment.next.month)
+print(paste('Train-set Accuracy =',1-misClassError))
+```
+
+```{r}
+misClassError <- mean(test_data$pred != test_data$default.payment.next.month)
+print(paste('Test-set Accuracy =',1-misClassError))
+```
+
+Los valores no están muy alejados entre ellos por lo que no existe un sobre entrenamiento.
